@@ -28,6 +28,14 @@ docker compose up --build
 VITE_API_BASE_URL=http://localhost:8000
 ```
 
+## Source Selector (Story S0.1)
+
+- The web app includes a top-level source selector:
+  - `TESS/Kepler` uses `POST /api/ingest` (existing behavior).
+  - `ZTF` uses `POST /api/ingest/ztf`.
+- Source selection is stored in the URL query string (`?source=tess` or `?source=ztf`) so refresh keeps state.
+- ZTF ingestion is currently a backend stub and returns `501 Not Implemented` until Story Z1.1.
+
 ## Expected Web Status
 
 - `Checking API...` while loading

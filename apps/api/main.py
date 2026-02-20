@@ -10,6 +10,7 @@ import lightkurve as lk
 import numpy as np
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from cache_utils import build_cache_key
@@ -295,3 +296,14 @@ def ingest(payload: IngestRequest) -> dict[str, Any]:
             "path": cache_rel_path(cache_path),
         },
     }
+
+
+@app.post("/api/ingest/ztf")
+def ingest_ztf_stub() -> JSONResponse:
+    return JSONResponse(
+        status_code=501,
+        content={
+            "error": "ZTF ingestion not implemented yet",
+            "next": "Implement Story Z1.1: fetch a ZTF light curve and return time/flux arrays",
+        },
+    )
