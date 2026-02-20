@@ -3,6 +3,8 @@ services:
     build: ./apps/api
     ports:
       - "8000:8000"
+    volumes:
+      - ./data:/app/data
 
   web:
     build: ./apps/web

@@ -39,6 +39,7 @@
       <p>Mission: {{ result.mission }}</p>
       <p>Author: {{ result.author }}</p>
       <p>Points: {{ result.n_points }}</p>
+      <p v-if="result.cache">Cache: {{ result.cache.hit ? 'hit' : 'miss' }}</p>
     </section>
 
     <small>API base URL: {{ configuredApiBaseUrl }}</small>
@@ -57,6 +58,11 @@ type IngestResponse = {
   time: number[]
   flux: number[]
   flux_err: number[] | null
+  cache?: {
+    hit: boolean
+    key: string
+    path: string
+  }
 }
 
 const configuredApiBaseUrl =

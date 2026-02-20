@@ -3,6 +3,9 @@
 ##      Feed time-series photometry into a model
 ##      Detect: Transit events, Variable stars, Possible supernova signatures
 
+## Architecture
+
+- See `docs/architecture.md` for the component diagram, API callouts, and external system dependencies.
 
 ## Run
 
@@ -30,6 +33,13 @@ VITE_API_BASE_URL=http://localhost:8000
 - `Checking API...` while loading
 - `API connected ✅` when `/api/health` returns `{ "ok": true }`
 - `API not reachable ❌` if the request fails or `ok` is false
+
+
+## Cache (Story 1.3)
+
+- Disk cache is stored at `./data/cache` on the host.
+- In Docker Compose, `./data` is mounted into the API container at `/app/data`.
+- Clear cache by deleting `./data/cache`.
 
 ## Story 1.1 Usage
 
