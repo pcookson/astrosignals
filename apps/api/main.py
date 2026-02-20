@@ -209,6 +209,52 @@ def extract_lightcurve_arrays(lc: Any) -> tuple[np.ndarray, np.ndarray, np.ndarr
     return time, flux_norm, flux_err
 
 
+def load_ztf_response_from_cache(cache_path: Path) -> dict[str, Any] | None:
+    response_path = cache_path / "ztf_response.json"
+    if not response_path.exists():
+        return None
+
+    try:
+        cached = json.loads(response_path.read_text(encoding="utf-8"))
+    except Exception:
+        logger.warning(
+            "ZTF cache entry is invalid, clearing %s", cache_path, exc_info=True
+        )
+        shutil.rmtree(cache_path, ignore_errors=True)
+        return None
+
+    required_keys = {"source", "selected", "available", "n_points", "time", "mag"}
+    if not required_keys.issubset(cached.keys()):
+        logger.warning(
+            "ZTF cache entry missing required keys, clearing %s", cache_path
+        )
+        shutil.rmtree(cache_path, ignore_errors=True)
+        return None
+
+    return cached
+
+
+def save_ztf_response_to_cache(
+    cache_path: Path,
+    cache_key: str,
+    request_payload: dict[str, Any],
+    response_payload: dict[str, Any],
+) -> None:
+    cache_path.mkdir(parents=True, exist_ok=True)
+    response_file_name = "ztf_response.json"
+    (cache_path / response_file_name).write_text(
+        json.dumps(response_payload), encoding="utf-8"
+    )
+
+    meta = {
+        "request": request_payload,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "cache_key": cache_key,
+        "saved_files": [response_file_name],
+    }
+    (cache_path / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+
 def normalized_column_name(name: str) -> str:
     return "".join(ch for ch in name.lower() if ch.isalnum())
 
@@ -371,6 +417,32 @@ def ingest_ztf(payload: ZtfIngestRequest) -> dict[str, Any]:
 
     bad_catflags_mask = 32768 if payload.badCatflagsMask is None else payload.badCatflagsMask
 
+    normalized_request = {
+        "source": "ZTF",
+        "objectId": object_id if has_object_id else None,
+        "ra": float(payload.ra) if has_ra else None,
+        "dec": float(payload.dec) if has_dec else None,
+        "radiusArcsec": float(radius_arcsec),
+        "band": band,
+        "badCatflagsMask": int(bad_catflags_mask),
+    }
+    cache_key = build_cache_key(normalized_request)
+    cache_path = get_cache_path(cache_key)
+
+    cached = load_ztf_response_from_cache(cache_path)
+    if cached is not None:
+        logger.info("ZTF cache hit key=%s", cache_key)
+        return {
+            **cached,
+            "cache": {
+                "hit": True,
+                "key": cache_key,
+                "path": cache_rel_path(cache_path),
+            },
+        }
+
+    logger.info("ZTF cache miss key=%s", cache_key)
+
     params: dict[str, Any] = {
         "BANDNAME": band,
         "FORMAT": "csv",
@@ -485,7 +557,7 @@ def ingest_ztf(payload: ZtfIngestRequest) -> dict[str, Any]:
         default_oid,
         len(unique_oids),
     )
-    return {
+    response_payload = {
         "source": "ZTF",
         "selected": {
             "oid": default_oid,
@@ -499,4 +571,22 @@ def ingest_ztf(payload: ZtfIngestRequest) -> dict[str, Any]:
         "time": time.tolist(),
         "mag": mag.tolist(),
         "magerr": magerr.tolist() if magerr is not None else None,
+    }
+    try:
+        save_ztf_response_to_cache(
+            cache_path=cache_path,
+            cache_key=cache_key,
+            request_payload=normalized_request,
+            response_payload=response_payload,
+        )
+    except Exception:
+        logger.exception("Failed to persist ZTF cache entry key=%s", cache_key)
+
+    return {
+        **response_payload,
+        "cache": {
+            "hit": False,
+            "key": cache_key,
+            "path": cache_rel_path(cache_path),
+        },
     }
