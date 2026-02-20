@@ -60,3 +60,17 @@ Use the web form and submit:
 
 The app sends `POST /api/ingest`, then plots normalized flux vs time.
 The first ingestion may take longer because the light curve has to be downloaded.
+
+## ZTF Usage (Story Z1.1)
+
+- ZTF ingestion endpoint: `POST /api/ingest/ztf`
+- Z1.1 currently supports either:
+  - `ra` + `dec` (+ optional `radiusArcsec`), or
+  - numeric `objectId` (digits-only)
+- `ZTF18...` style object names are not supported yet.
+- Example positional query values to try:
+  - `ra=298.0025`
+  - `dec=29.87147`
+  - `radiusArcsec=5`
+  - `band=r`
+- The IRSA ZTF API is public and may rate limit. Keep requests reasonable.

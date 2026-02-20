@@ -72,6 +72,9 @@
 
     <p v-if="loading">Loading light curve...</p>
     <p v-if="error" class="error">{{ error }}</p>
+    <p v-if="result?.source === 'ZTF'" class="ztf-note">
+      ZTF: plotting magnitude vs time (mjd)
+    </p>
 
     <div v-show="result" ref="plotEl" class="plot"></div>
 
@@ -81,6 +84,18 @@
       <p v-if="result.author">Author: {{ result.author }}</p>
       <p v-if="typeof result.n_points === 'number'">Points: {{ result.n_points }}</p>
       <p v-if="result.cache">Cache: {{ result.cache.hit ? 'hit' : 'miss' }}</p>
+      <p v-if="result.source === 'ZTF' && result.selected">
+        Selected oid: {{ result.selected.oid }}
+      </p>
+      <p v-if="result.source === 'ZTF' && result.available && result.available.n_oids > 1" class="warning">
+        Multiple sources in radius; showing oid with most points
+      </p>
+      <p v-if="result.source === 'ZTF' && result.available">
+        Available oids: {{ result.available.n_oids }}
+      </p>
+      <p v-if="result.source === 'ZTF' && result.selected?.filtercodes?.length">
+        Filtercodes: {{ result.selected.filtercodes.join(', ') }}
+      </p>
     </section>
 
     <small>API base URL: {{ configuredApiBaseUrl }}</small>
@@ -92,13 +107,24 @@ import Plotly from 'plotly.js-dist-min'
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 type IngestResponse = {
+  source?: string
   target?: string
   mission?: string
   author?: string
   n_points?: number
   time: number[]
-  flux: number[]
+  flux?: number[]
   flux_err?: number[] | null
+  mag?: number[]
+  magerr?: number[] | null
+  selected?: {
+    oid: number
+    filtercodes: string[]
+  }
+  available?: {
+    oids: number[]
+    n_oids: number
+  }
   cache?: {
     hit: boolean
     key: string
@@ -126,9 +152,9 @@ const author = ref('SPOC')
 const sector = ref('')
 
 const ztfObjectId = ref('')
-const ztfRa = ref('')
-const ztfDec = ref('')
-const ztfRadiusArcsec = ref('2')
+const ztfRa = ref('298.0025')
+const ztfDec = ref('29.87147')
+const ztfRadiusArcsec = ref('5')
 const ztfBand = ref<'g' | 'r' | 'i'>('r')
 
 const loading = ref(false)
@@ -150,13 +176,16 @@ function parseSector(): number | null {
   return parsed
 }
 
-function parseOptionalNumber(value: string, fieldName: string): number | null {
-  const trimmed = value.trim()
-  if (!trimmed) {
+function parseOptionalNumber(
+  value: string | number | null | undefined,
+  fieldName: string
+): number | null {
+  if (value === null || value === undefined || value === '') {
     return null
   }
 
-  const parsed = Number(trimmed)
+  const parsed =
+    typeof value === 'number' ? value : Number(String(value).trim())
   if (!Number.isFinite(parsed)) {
     throw new Error(`${fieldName} must be a valid number or left blank`)
   }
@@ -170,21 +199,33 @@ async function renderPlot(data: IngestResponse) {
     return
   }
 
+  const isZtf = data.source === 'ZTF'
+  const y = isZtf ? data.mag : data.flux
+  if (!y) {
+    throw new Error('No plottable values returned by API')
+  }
+
+  const trace: Record<string, unknown> = {
+    x: data.time,
+    y,
+    type: 'scatter',
+    mode: 'lines',
+    name: 'Light curve'
+  }
+  if (isZtf && data.magerr) {
+    trace.error_y = { type: 'data', array: data.magerr, visible: true }
+  }
+
   await Plotly.react(
     plotEl.value,
-    [
-      {
-        x: data.time,
-        y: data.flux,
-        type: 'scatter',
-        mode: 'lines',
-        name: 'Light curve'
-      }
-    ],
+    [trace],
     {
       margin: { t: 20, r: 20, b: 50, l: 60 },
       xaxis: { title: 'time' },
-      yaxis: { title: 'normalized flux (or magnitude later)' }
+      yaxis:
+        isZtf
+          ? { title: 'mag', autorange: 'reversed' }
+          : { title: 'normalized flux' }
     },
     { responsive: true }
   )
@@ -358,5 +399,14 @@ small {
 
 .error {
   color: #b30000;
+}
+
+.ztf-note {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.warning {
+  color: #8a3f00;
 }
 </style>
