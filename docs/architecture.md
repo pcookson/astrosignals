@@ -9,6 +9,8 @@ flowchart LR
     API -->|search lightcurve| LK["lightkurve Library"]
     LK -->|Query mission archives| Archives["External Mission Data Systems<br/>MAST / TESS / Kepler catalogs"]
     LK -->|download first result| API
+    API -->|cache read write| Cache["Disk Cache<br/>/app/data/cache"]
+    Cache -->|bind mount| HostData["Host Data Folder<br/>./data/cache"]
 
     API -->|JSON time flux flux_err n_points| Web
     Web -->|Render interactive chart| Plotly["Plotly.js (frontend)"]
@@ -16,6 +18,7 @@ flowchart LR
     subgraph Compose["Docker Compose Network"]
       Web
       API
+      Cache
     end
 ```
 
@@ -33,3 +36,9 @@ flowchart LR
 
 - `lightkurve` Python package for discovery/download of light curves.
 - Mission archives queried through lightkurve (for TESS/Kepler products).
+
+## Cache Storage
+
+- API cache path in container: `/app/data/cache`
+- Host bind mount in compose: `./data:/app/data`
+- Effective host cache directory: `./data/cache`
