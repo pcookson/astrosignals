@@ -78,6 +78,50 @@
 
     <div v-show="result" ref="plotEl" class="plot"></div>
 
+    <p v-if="source === 'tess' && result && transitLoading" class="transit-status">
+      Finding transit candidate...
+    </p>
+    <p v-if="source === 'tess' && transitError" class="error">{{ transitError }}</p>
+
+    <p
+      v-if="source === 'tess' && result && transitResult && !transitResult.found"
+      class="subtle"
+    >
+      Transit candidate not found{{ transitResult.reason ? `: ${transitResult.reason}` : '' }}
+    </p>
+
+    <section
+      v-if="source === 'tess' && transitResult?.found && transitResult.candidate"
+      class="candidate-card"
+    >
+      <h2>Transit Candidate</h2>
+      <p>Period (days): {{ transitResult.candidate.period_days.toFixed(5) }}</p>
+      <p>
+        Epoch (BTJD): {{ transitResult.candidate.t0_btjd.toFixed(5) }}
+        <span v-if="epochMjd(transitResult.candidate) !== null">
+          (MJD {{ epochMjd(transitResult.candidate)?.toFixed(5) }})
+        </span>
+      </p>
+      <p>Duration (hours): {{ transitResult.candidate.duration_hours.toFixed(2) }}</p>
+      <p>Depth (%): {{ transitResult.candidate.depth_pct.toFixed(3) }}</p>
+      <p v-if="transitResult.candidate.sde != null">
+        SDE: {{ transitResult.candidate.sde.toFixed(2) }}
+      </p>
+      <p v-if="transitResult.candidate.depth_snr != null">
+        Depth SNR: {{ transitResult.candidate.depth_snr.toFixed(2) }}
+      </p>
+      <p>
+        Number of transits observed:
+        {{ transitResult.candidate.n_transits_observed }}
+      </p>
+    </section>
+
+    <div
+      v-show="source === 'tess' && transitResult?.found"
+      ref="transitPlotEl"
+      class="plot transit-plot"
+    ></div>
+
     <section v-if="result" class="meta">
       <p v-if="result.target">Target: {{ result.target }}</p>
       <p v-if="result.mission">Mission: {{ result.mission }}</p>
@@ -87,7 +131,10 @@
       <p v-if="result.source === 'ZTF' && result.selected">
         Selected oid: {{ result.selected.oid }}
       </p>
-      <p v-if="result.source === 'ZTF' && result.available && result.available.n_oids > 1" class="warning">
+      <p
+        v-if="result.source === 'ZTF' && result.available && result.available.n_oids > 1"
+        class="warning"
+      >
         Multiple sources in radius; showing oid with most points
       </p>
       <p v-if="result.source === 'ZTF' && result.available">
@@ -105,6 +152,13 @@
 <script setup lang="ts">
 import Plotly from 'plotly.js-dist-min'
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+
+import {
+  runTransitSearch,
+  type TransitCandidate,
+  type TransitSearchRequest,
+  type TransitSearchResponse
+} from './services/api'
 
 type IngestResponse = {
   source?: string
@@ -162,6 +216,15 @@ const error = ref('')
 const result = ref<IngestResponse | null>(null)
 const plotEl = ref<HTMLDivElement | null>(null)
 
+const transitLoading = ref(false)
+const transitError = ref('')
+const transitResult = ref<TransitSearchResponse | null>(null)
+const transitPlotEl = ref<HTMLDivElement | null>(null)
+const lastTransitRequestKey = ref('')
+
+let transitSearchTimer: ReturnType<typeof setTimeout> | null = null
+let transitSearchSequence = 0
+
 function parseSector(): number | null {
   const value = sector.value.trim()
   if (!value) {
@@ -191,6 +254,20 @@ function parseOptionalNumber(
   }
 
   return parsed
+}
+
+function clearTransitState(resetCacheKey: boolean) {
+  transitLoading.value = false
+  transitError.value = ''
+  transitResult.value = null
+  if (resetCacheKey) {
+    lastTransitRequestKey.value = ''
+  }
+  if (transitSearchTimer) {
+    clearTimeout(transitSearchTimer)
+    transitSearchTimer = null
+  }
+  transitSearchSequence += 1
 }
 
 async function renderPlot(data: IngestResponse) {
@@ -231,6 +308,130 @@ async function renderPlot(data: IngestResponse) {
   )
 }
 
+async function renderTransitPlot(data: TransitSearchResponse) {
+  await nextTick()
+  if (!transitPlotEl.value) {
+    return
+  }
+
+  if (!data.found || !data.folded) {
+    Plotly.purge(transitPlotEl.value)
+    return
+  }
+
+  await Plotly.react(
+    transitPlotEl.value,
+    [
+      {
+        x: data.folded.phase,
+        y: data.folded.flux,
+        type: 'scatter',
+        mode: 'markers',
+        name: 'Binned folded flux',
+        marker: { size: 5 }
+      }
+    ],
+    {
+      title: 'Phase-folded Transit (BLS best period)',
+      margin: { t: 44, r: 20, b: 50, l: 60 },
+      xaxis: { title: 'phase', range: [-0.5, 0.5] },
+      yaxis: { title: 'detrended flux' },
+      shapes: [
+        {
+          type: 'line',
+          x0: -0.5,
+          x1: 0.5,
+          y0: 1.0,
+          y1: 1.0,
+          line: { color: '#777', width: 1, dash: 'dot' }
+        }
+      ]
+    },
+    { responsive: true }
+  )
+}
+
+function buildTransitRequest(): TransitSearchRequest {
+  return {
+    target: target.value,
+    mission: mission.value,
+    author: author.value,
+    sector: parseSector(),
+    min_period_days: 0.5,
+    max_period_days: null,
+    detrend_window_days: 0.75,
+    fold_bins: 200
+  }
+}
+
+function scheduleTransitSearch() {
+  if (transitSearchTimer) {
+    clearTimeout(transitSearchTimer)
+  }
+  transitSearchTimer = setTimeout(() => {
+    transitSearchTimer = null
+    void runTransitSearchForCurrentIngest(false)
+  }, 250)
+}
+
+async function runTransitSearchForCurrentIngest(force: boolean) {
+  if (source.value !== 'tess' || !result.value) {
+    return
+  }
+
+  let request: TransitSearchRequest
+  try {
+    request = buildTransitRequest()
+  } catch (err) {
+    transitResult.value = null
+    transitError.value =
+      err instanceof Error ? err.message : 'Invalid transit search settings'
+    return
+  }
+  const requestKey = JSON.stringify(request)
+  if (!force && requestKey === lastTransitRequestKey.value) {
+    return
+  }
+
+  const sequence = ++transitSearchSequence
+  transitLoading.value = true
+  transitError.value = ''
+
+  try {
+    const response = await runTransitSearch(request)
+    if (sequence !== transitSearchSequence) {
+      return
+    }
+
+    transitResult.value = response
+    lastTransitRequestKey.value = requestKey
+    await renderTransitPlot(response)
+  } catch (err) {
+    if (sequence !== transitSearchSequence) {
+      return
+    }
+
+    transitResult.value = null
+    transitError.value =
+      err instanceof Error ? err.message : 'Failed to run transit search'
+  } finally {
+    if (sequence === transitSearchSequence) {
+      transitLoading.value = false
+    }
+  }
+}
+
+function epochMjd(candidate: TransitCandidate): number | null {
+  const zeroPoint = candidate.time_system.zero_point
+  if (
+    candidate.time_system.format.toUpperCase() === 'BTJD' &&
+    typeof zeroPoint === 'number'
+  ) {
+    return candidate.t0_btjd + zeroPoint - 2400000.5
+  }
+  return null
+}
+
 async function ingestTessAndPlot() {
   loading.value = true
   error.value = ''
@@ -261,8 +462,12 @@ async function ingestTessAndPlot() {
     const data = (await response.json()) as IngestResponse
     result.value = data
     await renderPlot(data)
+
+    clearTransitState(true)
+    scheduleTransitSearch()
   } catch (err) {
     result.value = null
+    clearTransitState(true)
     error.value = err instanceof Error ? err.message : 'Failed to ingest light curve'
   } finally {
     loading.value = false
@@ -302,8 +507,11 @@ async function ingestZtfAndPlot() {
     const data = (await response.json()) as IngestResponse
     result.value = data
     await renderPlot(data)
+
+    clearTransitState(true)
   } catch (err) {
     result.value = null
+    clearTransitState(true)
     error.value =
       err instanceof Error ? err.message : 'Failed to ingest ZTF light curve'
   } finally {
@@ -330,11 +538,15 @@ watch(source, (value) => {
 
   error.value = ''
   result.value = null
+  clearTransitState(true)
 })
 
 onBeforeUnmount(() => {
   if (plotEl.value) {
     Plotly.purge(plotEl.value)
+  }
+  if (transitPlotEl.value) {
+    Plotly.purge(transitPlotEl.value)
   }
 })
 </script>
@@ -354,6 +566,11 @@ main {
 h1 {
   margin: 0;
   font-size: 2rem;
+}
+
+h2 {
+  margin: 0;
+  font-size: 1.1rem;
 }
 
 .source {
@@ -384,6 +601,33 @@ button {
 .plot {
   width: 100%;
   min-height: 420px;
+}
+
+.transit-plot {
+  min-height: 360px;
+}
+
+.candidate-card {
+  border: 1px solid #d8dde3;
+  border-radius: 8px;
+  padding: 0.75rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.4rem 0.8rem;
+}
+
+.candidate-card p {
+  margin: 0;
+}
+
+.transit-status,
+.subtle {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.subtle {
+  color: #475467;
 }
 
 .meta {

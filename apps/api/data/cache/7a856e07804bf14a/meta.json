@@ -1,0 +1,16 @@
+{
+  "request": {
+    "target": "TIC 25155310",
+    "mission": "TESS",
+    "author": "SPOC",
+    "sector": null
+  },
+  "timestamp": "2026-02-21T03:41:50.189663+00:00",
+  "cache_key": "7a856e07804bf14a",
+  "saved_files": [
+    "tess2018206045859-s0001-0000000025155310-0120-s_lc.fits"
+  ],
+  "search_result": {
+    "description": "SearchResult containing 1 data products.\n\n #     mission     year author exptime target_name distance\n                                  s                 arcsec \n--- -------------- ---- ------ ------- ----------- --------\n  0 TESS Sector 01 2018   SPOC     120    25155310      0.0"
+  }
+}

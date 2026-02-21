@@ -1,0 +1,18 @@
+{
+  "request": {
+    "source": "TESS_TRANSIT_BLS",
+    "target": "TIC 25155310",
+    "mission": "TESS",
+    "author": "SPOC",
+    "sector": null,
+    "min_period_days": 0.5,
+    "max_period_days": null,
+    "detrend_window_days": 0.75,
+    "fold_bins": 200
+  },
+  "timestamp": "2026-02-21T03:41:51.375320+00:00",
+  "cache_key": "7bac2f2716f1e376",
+  "saved_files": [
+    "transit_search_response.json"
+  ]
+}
