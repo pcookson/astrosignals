@@ -26,3 +26,5 @@ apps/web/src/main.js
 # OS/editor noise
 .DS_Store
 Thumbs.db
+apps/api/Makefile
+.vscode/settings.json

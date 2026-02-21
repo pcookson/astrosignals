@@ -143,26 +143,74 @@ def to_lightcurve(downloaded: Any) -> Any:
     raise HTTPException(status_code=502, detail="Downloaded product is not a light curve")
 
 
-def extract_lightcurve_arrays(lc: Any) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+def _array_from_column(column: Any) -> np.ndarray:
+    if hasattr(column, "value"):
+        return np.asarray(column.value, dtype=float)
+    if hasattr(column, "to_value"):
+        return np.asarray(column.to_value(), dtype=float)
+    return np.asarray(column, dtype=float)
+
+
+def extract_lightcurve_arrays(
+    lc: Any,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, dict[str, Any]]:
     if hasattr(lc.time, "value"):
         time = np.asarray(lc.time.value, dtype=float)
     else:
         time = np.asarray(lc.time.to_value(), dtype=float)
-    flux = np.asarray(lc.flux.value, dtype=float)
+    flux = _array_from_column(lc.flux)
+    n_raw = int(time.size)
 
     flux_err = None
     if getattr(lc, "flux_err", None) is not None:
-        flux_err = np.asarray(lc.flux_err.value, dtype=float)
+        flux_err = _array_from_column(lc.flux_err)
 
-    valid = ~(np.isnan(time) | np.isnan(flux))
+    valid = np.isfinite(time) & np.isfinite(flux)
+    if flux_err is not None:
+        valid = valid & np.isfinite(flux_err)
+
+     # ---- Build masks with breakdown stats ----
+    finite_mask = np.isfinite(time) & np.isfinite(flux)
+    if flux_err is not None:
+        finite_mask &= np.isfinite(flux_err)
+
+    n_finite = int(np.count_nonzero(finite_mask))
+    n_removed_nonfinite = int(n_raw - n_finite)
+    
+    quality_mask_applied = False
+    quality_mask = np.ones_like(finite_mask, dtype=bool)
+    n_quality_pass = None
+    n_removed_quality = None
+
+    quality = getattr(lc, "quality", None)
+    if quality is not None:
+        quality_values = _array_from_column(quality)
+        # quality must be finite and == 0
+        quality_mask = np.isfinite(quality_values) & (quality_values == 0)
+        quality_mask_applied = True
+
+        n_quality_pass = int(np.count_nonzero(quality_mask))
+        n_removed_quality = int(n_raw - n_quality_pass)
+    else:
+        logger.info("QUALITY column unavailable; applying finite filtering only")
+
+    n_quality_pass_raw = int(np.count_nonzero(quality_mask))
+    n_removed_quality_raw = int(n_raw - n_quality_pass_raw)
+
+    valid = finite_mask & quality_mask
+    n_after_mask = int(np.count_nonzero(valid))
+    n_removed_quality_after_finite = int(n_finite - n_after_mask)
+
     time = time[valid]
     flux = flux[valid]
     if flux_err is not None:
         flux_err = flux_err[valid]
+    n_after_mask = int(time.size)
 
     if time.size == 0:
         raise HTTPException(
-            status_code=422, detail="No valid points available after NaN filtering"
+            status_code=422,
+            detail="No valid points available after finite/quality filtering",
         )
 
     median_flux = np.median(flux)
@@ -172,7 +220,90 @@ def extract_lightcurve_arrays(lc: Any) -> tuple[np.ndarray, np.ndarray, np.ndarr
         )
 
     flux_norm = flux / median_flux
-    return time, flux_norm, flux_err
+    flux_err_norm = flux_err / median_flux if flux_err is not None else None
+
+    time_format = str(getattr(lc.time, "format", "") or "").upper() or "BTJD"
+    time_scale = str(getattr(lc.time, "scale", "") or "").upper() or "TDB"
+    time_zero_point: float | None = None
+    time_system_source = "default"
+
+    lc_meta = getattr(lc, "meta", {})
+    if isinstance(lc_meta, dict):
+        bjd_ref_i = lc_meta.get("BJDREFI")
+        bjd_ref_f = lc_meta.get("BJDREFF")
+        if bjd_ref_i is not None or bjd_ref_f is not None:
+            time_zero_point = float(bjd_ref_i or 0.0) + float(bjd_ref_f or 0.0)
+            time_system_source = "from_lc_meta"
+
+    if time_zero_point is None and time_format == "BTJD":
+        time_zero_point = 2457000.0
+        if time_system_source != "from_lc_meta":
+            time_system_source = "default_btjd"
+
+    flux_field_used = "flux"
+    flux_name = getattr(lc.flux, "name", None)
+    if isinstance(flux_name, str) and flux_name.strip():
+        flux_field_used = flux_name
+
+    dt_days_med = np.nan
+    cadence_seconds = np.nan
+    if time.size > 1:
+        dt = np.diff(time)
+        dt = dt[np.isfinite(dt) & (dt > 0)]
+        if dt.size > 0:
+            dt_days_med = float(np.median(dt))
+            cadence_seconds = dt_days_med * 86400.0
+
+    t_start = float(time.min())
+    t_end = float(time.max())
+    logger.info(
+        "TESS ingest stats n_raw=%s n_finite=%s n_after_mask=%s removed_nonfinite=%s " 
+        "removed_quality_raw=%s " 
+        "removed_quality_after_finite=%s "
+        "removed_quality=%s "
+        "t_start=%s t_end=%s cadence_seconds=%s flux_field_used=%s quality_mask_applied=%s",
+        n_raw,
+        n_finite,
+        n_after_mask,
+        n_removed_nonfinite,
+        n_removed_quality_raw,
+        n_removed_quality_after_finite,
+        n_removed_quality,
+        t_start,
+        t_end,
+        cadence_seconds,
+        flux_field_used,
+        quality_mask_applied,
+    )
+
+    expected_ranges = (
+        (10.0, 30.0),
+        (100.0, 140.0),
+        (500.0, 700.0),
+        (1500.0, 2100.0),
+    )
+    if np.isfinite(cadence_seconds) and not any(
+        low <= cadence_seconds <= high for low, high in expected_ranges
+    ):
+        logger.warning(
+            "TESS cadence sanity warning cadence_seconds=%s n_points=%s",
+            cadence_seconds,
+            n_after_mask,
+        )
+
+    meta = {
+        "time_format": time_format,
+        "time_scale": time_scale,
+        "time_zero_point": time_zero_point,
+        "time_system_source": time_system_source,
+        "quality_mask_applied": quality_mask_applied,
+        "n_raw": n_raw,
+        "n_after_mask": n_after_mask,
+        "cadence_seconds": cadence_seconds if np.isfinite(cadence_seconds) else None,
+        "flux_field_used": flux_field_used,
+    }
+
+    return time, flux_norm, flux_err_norm, meta
 
 
 @router.post("/api/ingest")
@@ -252,7 +383,7 @@ def ingest(payload: IngestRequest) -> dict[str, Any]:
         except Exception:
             logger.exception("Failed to persist cache entry key=%s", cache_key)
 
-    time, flux_norm, flux_err = extract_lightcurve_arrays(lightcurve)
+    time, flux_norm, flux_err, ingest_meta = extract_lightcurve_arrays(lightcurve)
     logger.info("n_points=%s", time.size)
 
     return {
@@ -268,4 +399,5 @@ def ingest(payload: IngestRequest) -> dict[str, Any]:
             "key": cache_key,
             "path": cache_rel_path(cache_path),
         },
+        "meta": ingest_meta,
     }
