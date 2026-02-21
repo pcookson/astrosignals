@@ -95,24 +95,85 @@
       class="candidate-card"
     >
       <h2>Transit Candidate</h2>
-      <p>Period (days): {{ transitResult.candidate.period_days.toFixed(5) }}</p>
-      <p>
-        Epoch (BTJD): {{ transitResult.candidate.t0_btjd.toFixed(5) }}
-        <span v-if="epochMjd(transitResult.candidate) !== null">
-          (MJD {{ epochMjd(transitResult.candidate)?.toFixed(5) }})
+      <p class="candidate-item">
+        <span class="candidate-label">
+          Period (days)
+          <Tooltip
+            label="Period (days)"
+            text="Estimated time between transits. More observed transits and longer time coverage usually mean a more precise period."
+          />
         </span>
+        <span class="candidate-value">{{ transitResult.candidate.period_days.toFixed(5) }}</span>
       </p>
-      <p>Duration (hours): {{ transitResult.candidate.duration_hours.toFixed(2) }}</p>
-      <p>Depth (%): {{ transitResult.candidate.depth_pct.toFixed(3) }}</p>
-      <p v-if="transitResult.candidate.sde != null">
-        SDE: {{ transitResult.candidate.sde.toFixed(2) }}
+      <p class="candidate-item">
+        <span class="candidate-label">
+          Epoch (BTJD)
+          <Tooltip
+            label="Epoch (BTJD)"
+            text="Estimated mid-transit time for one reference transit, in BTJD (BJD − 2457000). Use this with the period to predict future transits."
+          />
+        </span>
+        <span class="candidate-value">{{ transitResult.candidate.t0_btjd.toFixed(5) }}</span>
       </p>
-      <p v-if="transitResult.candidate.depth_snr != null">
-        Depth SNR: {{ transitResult.candidate.depth_snr.toFixed(2) }}
+      <p v-if="epochMjd(transitResult.candidate) !== null" class="candidate-item">
+        <span class="candidate-label">
+          Epoch (MJD)
+          <Tooltip
+            label="Epoch (MJD)"
+            text="Same epoch expressed as MJD for convenience (MJD = JD − 2400000.5)."
+          />
+        </span>
+        <span class="candidate-value">{{ epochMjd(transitResult.candidate)?.toFixed(5) }}</span>
       </p>
-      <p>
-        Number of transits observed:
-        {{ transitResult.candidate.n_transits_observed }}
+      <p class="candidate-item">
+        <span class="candidate-label">
+          Duration (hours)
+          <Tooltip
+            label="Duration (hours)"
+            text="Approximate time from transit start to end. Longer durations can indicate a larger star, a wider orbit, or a lower-impact transit."
+          />
+        </span>
+        <span class="candidate-value">{{ transitResult.candidate.duration_hours.toFixed(2) }}</span>
+      </p>
+      <p class="candidate-item">
+        <span class="candidate-label">
+          Depth (%)
+          <Tooltip
+            label="Depth (%)"
+            text="Approximate drop in brightness during transit. Depth ≈ (Rp/Rs)², so larger planets generally produce deeper transits."
+          />
+        </span>
+        <span class="candidate-value">{{ transitResult.candidate.depth_pct.toFixed(3) }}</span>
+      </p>
+      <p v-if="transitResult.candidate.sde != null" class="candidate-item">
+        <span class="candidate-label">
+          SDE
+          <Tooltip
+            label="SDE"
+            text="Signal Detection Efficiency: how strong the best BLS peak is compared to the background. Higher is better; values ~8+ often look promising, but false positives still happen."
+          />
+        </span>
+        <span class="candidate-value">{{ transitResult.candidate.sde.toFixed(2) }}</span>
+      </p>
+      <p v-if="transitResult.candidate.depth_snr != null" class="candidate-item">
+        <span class="candidate-label">
+          Depth SNR
+          <Tooltip
+            label="Depth SNR"
+            text="Depth signal-to-noise ratio: transit depth relative to the typical scatter in the detrended light curve. Higher is more confident."
+          />
+        </span>
+        <span class="candidate-value">{{ transitResult.candidate.depth_snr.toFixed(2) }}</span>
+      </p>
+      <p class="candidate-item">
+        <span class="candidate-label">
+          Number of transits observed
+          <Tooltip
+            label="Number of transits observed"
+            text="How many transits fall within the time range analyzed. More transits usually increases confidence."
+          />
+        </span>
+        <span class="candidate-value">{{ transitResult.candidate.n_transits_observed }}</span>
       </p>
     </section>
 
@@ -152,6 +213,7 @@
 <script setup lang="ts">
 import Plotly from 'plotly.js-dist-min'
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import Tooltip from './components/Tooltip.vue'
 
 import {
   runTransitSearch,
@@ -612,12 +674,37 @@ button {
   border-radius: 8px;
   padding: 0.75rem;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 0.4rem 0.8rem;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 0.6rem 0.8rem;
+}
+
+.candidate-card h2 {
+  grid-column: 1 / -1;
 }
 
 .candidate-card p {
   margin: 0;
+}
+
+.candidate-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.2rem;
+}
+
+.candidate-label {
+  display: inline-flex;
+  align-items: center;
+  line-height: 1.25;
+  font-size: 0.95rem;
+  color: #344054;
+}
+
+.candidate-value {
+  line-height: 1.2;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
 .transit-status,
@@ -652,5 +739,11 @@ small {
 
 .warning {
   color: #8a3f00;
+}
+
+@media (prefers-color-scheme: dark) {
+  .candidate-label {
+    color: #cbd5e1;
+  }
 }
 </style>
