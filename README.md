@@ -61,6 +61,18 @@ Use the web form and submit:
 The app sends `POST /api/ingest`, then plots normalized flux vs time.
 The first ingestion may take longer because the light curve has to be downloaded.
 
+## TESS Data Manipulation Transparency
+
+`POST /api/ingest` applies these transformations to downloaded TESS/Kepler light curves:
+
+- Filters to finite samples for `time` and `flux`, and for `flux_err` when present.
+- Applies TESS quality masking when a `quality` column is available: keeps only `quality == 0`.
+- If quality is unavailable, continues with finite-only filtering and logs that quality was unavailable.
+- Normalizes by median flux: `flux_norm = flux / median_flux`.
+- Normalizes uncertainty with the same scale: `flux_err_norm = flux_err / median_flux` (when `flux_err` exists).
+- Returns time-system metadata in API response `meta` (`time_format`, `time_scale`, `time_zero_point`, `time_system_source`).
+- Logs cadence sanity statistics from filtered time values, including median cadence in seconds.
+
 ## ZTF Usage (Story Z1.1)
 
 - ZTF ingestion endpoint: `POST /api/ingest/ztf`
