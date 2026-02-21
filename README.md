@@ -28,6 +28,14 @@ docker compose up --build
 VITE_API_BASE_URL=http://localhost:8000
 ```
 
+## Source Selector (Story S0.1)
+
+- The web app includes a top-level source selector:
+  - `TESS/Kepler` uses `POST /api/ingest` (existing behavior).
+  - `ZTF` uses `POST /api/ingest/ztf`.
+- Source selection is stored in the URL query string (`?source=tess` or `?source=ztf`) so refresh keeps state.
+- ZTF ingestion is currently a backend stub and returns `501 Not Implemented` until Story Z1.1.
+
 ## Expected Web Status
 
 - `Checking API...` while loading
@@ -52,3 +60,17 @@ Use the web form and submit:
 
 The app sends `POST /api/ingest`, then plots normalized flux vs time.
 The first ingestion may take longer because the light curve has to be downloaded.
+
+## ZTF Usage (Story Z1.1)
+
+- ZTF ingestion endpoint: `POST /api/ingest/ztf`
+- Z1.1 currently supports either:
+  - `ra` + `dec` (+ optional `radiusArcsec`), or
+  - numeric `objectId` (digits-only)
+- `ZTF18...` style object names are not supported yet.
+- Example positional query values to try:
+  - `ra=298.0025`
+  - `dec=29.87147`
+  - `radiusArcsec=5`
+  - `band=r`
+- The IRSA ZTF API is public and may rate limit. Keep requests reasonable.
