@@ -13,6 +13,25 @@
 docker compose up --build
 ```
 
+## Python Environment (API)
+
+Use only the API virtual environment at `apps/api/.venv` for local Python commands.
+This keeps `/usr/bin/python3` and system-managed packages untouched.
+
+```bash
+cd apps/api
+make bootstrap
+make which-python
+make test
+make run
+```
+
+Expected interpreter:
+
+```bash
+/home/patrick/Development/astrosignals/apps/api/.venv/bin/python
+```
+
 ## Open
 
 - Web: http://localhost:5173
