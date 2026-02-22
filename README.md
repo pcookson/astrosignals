@@ -1,22 +1,66 @@
 # AstroSignals
-## Goals:
-##      Feed time-series photometry into a model
-##      Detect: Transit events, Variable stars, Possible supernova signatures
 
-## Architecture
+AstroSignals is a web application for exploring TESS and Kepler light-curve data and supporting workflows for identifying potential astronomical anomalies in time-series photometry.
 
-- See `docs/architecture.md` for the component diagram, API callouts, and external system dependencies.
+Current focus:
 
-## Run
+- Ingest TESS/Kepler light curves
+- Visualize normalized flux over time
+- Support anomaly discovery workflows (for example, potential exoplanet candidates)
+
+## What This App Is For
+
+This project is intended as a lightweight interface for fetching and inspecting space-telescope photometry before model-based analysis. The goal is to make it easy to:
+
+- query a target from TESS/Kepler sources,
+- inspect the returned light curve, and
+- search for anomalous behavior in the light curve (including potential exoplanet-candidate signals).
+
+## Data Manipulation Transparency (TESS/Kepler)
+
+Scientific transparency matters, so this README documents how the `POST /api/ingest` pipeline preprocesses downloaded TESS/Kepler light curves:
+
+- Filters to finite values for `time` and `flux`
+- Filters `flux_err` to finite values when uncertainty is present
+- Applies quality masking when a `quality` column is available (keeps samples with `quality == 0`)
+- Continues with finite-only filtering if quality flags are unavailable, and logs that condition
+- Normalizes flux by the median flux value:
+  - `flux_norm = flux / median_flux`
+- Normalizes uncertainty using the same median-flux scale (when `flux_err` exists):
+  - `flux_err_norm = flux_err / median_flux`
+- Returns time-system metadata in the API response `meta` (for example `time_format`, `time_scale`, `time_zero_point`, `time_system_source`)
+- Logs cadence sanity statistics from filtered time values (including median cadence in seconds)
+
+These details are included so users can interpret plots and downstream results with the ingestion/preprocessing steps clearly documented.
+
+## Run Locally
 
 ```bash
 docker compose up --build
 ```
 
-## Python Environment (API)
+Open:
 
-Use only the API virtual environment at `apps/api/.venv` for local Python commands.
-This keeps `/usr/bin/python3` and system-managed packages untouched.
+- Web: `http://localhost:5173`
+- API health: `http://localhost:8000/api/health`
+
+## Example Usage
+
+Use the web form with a TESS target such as:
+
+- target: `TIC 25155310`
+- mission: `TESS`
+- author: `SPOC`
+- sector: blank
+
+The app sends `POST /api/ingest` and plots normalized flux vs. time.
+The first request may take longer because the light curve must be downloaded and cached.
+
+## Local Development Notes
+
+### Python Environment (API)
+
+Use the API virtual environment at `apps/api/.venv` for local Python commands.
 
 ```bash
 cd apps/api
@@ -29,79 +73,25 @@ make run
 Expected interpreter:
 
 ```bash
-/home/patrick/Development/astrosignals/apps/api/.venv/bin/python
+<project-root>/apps/api/.venv/bin/python
 ```
 
-## Open
-
-- Web: http://localhost:5173
-- API health: http://localhost:8000/api/health
-
-## API Base URL Config
+### API Base URL (Web)
 
 - Docker Compose sets `VITE_API_BASE_URL=http://api:8000` for the web service.
-- The web app requests `/api/health` from Vite, and Vite proxies `/api` to `VITE_API_BASE_URL`.
-- If you run web locally outside Docker, set:
+- Vite proxies `/api` requests to `VITE_API_BASE_URL`.
+- If running the web app outside Docker, set:
 
 ```bash
 VITE_API_BASE_URL=http://localhost:8000
 ```
 
-## Source Selector (Story S0.1)
+### Cache
 
-- The web app includes a top-level source selector:
-  - `TESS/Kepler` uses `POST /api/ingest` (existing behavior).
-  - `ZTF` uses `POST /api/ingest/ztf`.
-- Source selection is stored in the URL query string (`?source=tess` or `?source=ztf`) so refresh keeps state.
-- ZTF ingestion is currently a backend stub and returns `501 Not Implemented` until Story Z1.1.
+- Disk cache is stored at `./data/cache`
+- In Docker Compose, `./data` is mounted into the API container at `/app/data`
+- Clear cache by deleting `./data/cache`
 
-## Expected Web Status
+## Architecture
 
-- `Checking API...` while loading
-- `API connected ✅` when `/api/health` returns `{ "ok": true }`
-- `API not reachable ❌` if the request fails or `ok` is false
-
-
-## Cache (Story 1.3)
-
-- Disk cache is stored at `./data/cache` on the host.
-- In Docker Compose, `./data` is mounted into the API container at `/app/data`.
-- Clear cache by deleting `./data/cache`.
-
-## Story 1.1 Usage
-
-Use the web form and submit:
-
-- target: `TIC 25155310`
-- mission: `TESS`
-- author: `SPOC`
-- sector: blank
-
-The app sends `POST /api/ingest`, then plots normalized flux vs time.
-The first ingestion may take longer because the light curve has to be downloaded.
-
-## TESS Data Manipulation Transparency
-
-`POST /api/ingest` applies these transformations to downloaded TESS/Kepler light curves:
-
-- Filters to finite samples for `time` and `flux`, and for `flux_err` when present.
-- Applies TESS quality masking when a `quality` column is available: keeps only `quality == 0`.
-- If quality is unavailable, continues with finite-only filtering and logs that quality was unavailable.
-- Normalizes by median flux: `flux_norm = flux / median_flux`.
-- Normalizes uncertainty with the same scale: `flux_err_norm = flux_err / median_flux` (when `flux_err` exists).
-- Returns time-system metadata in API response `meta` (`time_format`, `time_scale`, `time_zero_point`, `time_system_source`).
-- Logs cadence sanity statistics from filtered time values, including median cadence in seconds.
-
-## ZTF Usage (Story Z1.1)
-
-- ZTF ingestion endpoint: `POST /api/ingest/ztf`
-- Z1.1 currently supports either:
-  - `ra` + `dec` (+ optional `radiusArcsec`), or
-  - numeric `objectId` (digits-only)
-- `ZTF18...` style object names are not supported yet.
-- Example positional query values to try:
-  - `ra=298.0025`
-  - `dec=29.87147`
-  - `radiusArcsec=5`
-  - `band=r`
-- The IRSA ZTF API is public and may rate limit. Keep requests reasonable.
+- See `docs/architecture.md` for the component diagram, API callouts, and external system dependencies.

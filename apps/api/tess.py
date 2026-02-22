@@ -3,6 +3,7 @@ import logging
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 import lightkurve as lk
@@ -10,6 +11,7 @@ import numpy as np
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from analysis.transit_bls import bin_folded_curve, detrend_flux, phase_fold, run_bls
 from cache_utils import build_cache_key
 from config import CACHE_DIR
 
@@ -22,6 +24,17 @@ class IngestRequest(BaseModel):
     mission: str = "TESS"
     author: str = "SPOC"
     sector: int | None = None
+
+
+class TransitSearchRequest(BaseModel):
+    target: str
+    mission: str = "TESS"
+    author: str = "SPOC"
+    sector: int | None = None
+    min_period_days: float = 0.5
+    max_period_days: float | None = None
+    detrend_window_days: float = 0.75
+    fold_bins: int = 200
 
 
 def normalize_payload(payload: IngestRequest) -> dict[str, Any]:
@@ -81,6 +94,48 @@ def load_lightcurve_from_cache(cache_path: Path) -> tuple[Any, dict[str, Any]] |
         logger.warning("Cache entry is invalid, clearing %s", cache_path, exc_info=True)
         shutil.rmtree(cache_path, ignore_errors=True)
         return None
+
+
+def load_json_response_from_cache(
+    cache_path: Path, file_name: str, required_keys: set[str]
+) -> dict[str, Any] | None:
+    response_path = cache_path / file_name
+    if not response_path.exists():
+        return None
+
+    try:
+        cached = json.loads(response_path.read_text(encoding="utf-8"))
+    except Exception:
+        logger.warning("Cache entry is invalid, clearing %s", cache_path, exc_info=True)
+        shutil.rmtree(cache_path, ignore_errors=True)
+        return None
+
+    if not required_keys.issubset(cached.keys()):
+        logger.warning("Cache entry missing required keys, clearing %s", cache_path)
+        shutil.rmtree(cache_path, ignore_errors=True)
+        return None
+
+    return cached
+
+
+def save_json_response_to_cache(
+    cache_path: Path,
+    cache_key: str,
+    request_payload: dict[str, Any],
+    response_payload: dict[str, Any],
+    response_file_name: str,
+) -> None:
+    cache_path.mkdir(parents=True, exist_ok=True)
+    (cache_path / response_file_name).write_text(
+        json.dumps(response_payload), encoding="utf-8"
+    )
+    meta = {
+        "request": request_payload,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "cache_key": cache_key,
+        "saved_files": [response_file_name],
+    }
+    (cache_path / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
 
 def candidate_source_paths(downloaded: Any) -> list[Path]:
@@ -400,4 +455,212 @@ def ingest(payload: IngestRequest) -> dict[str, Any]:
             "path": cache_rel_path(cache_path),
         },
         "meta": ingest_meta,
+    }
+
+
+@router.post("/api/tess/transit-search")
+def transit_search(payload: TransitSearchRequest) -> dict[str, Any]:
+    started = perf_counter()
+
+    if payload.detrend_window_days <= 0:
+        raise HTTPException(status_code=400, detail="detrend_window_days must be > 0")
+    if payload.min_period_days <= 0:
+        raise HTTPException(status_code=400, detail="min_period_days must be > 0")
+    if payload.fold_bins < 10:
+        raise HTTPException(status_code=400, detail="fold_bins must be >= 10")
+
+    normalized = normalize_payload(
+        IngestRequest(
+            target=payload.target,
+            mission=payload.mission,
+            author=payload.author,
+            sector=payload.sector,
+        )
+    )
+
+    cache_request = {
+        "source": "TESS_TRANSIT_BLS",
+        "target": normalized["target"],
+        "mission": normalized["mission"],
+        "author": normalized["author"],
+        "sector": normalized["sector"],
+        "min_period_days": float(payload.min_period_days),
+        "max_period_days": (
+            None if payload.max_period_days is None else float(payload.max_period_days)
+        ),
+        "detrend_window_days": float(payload.detrend_window_days),
+        "fold_bins": int(payload.fold_bins),
+    }
+    cache_key = build_cache_key(cache_request)
+    cache_path = get_cache_path(cache_key)
+
+    cached = load_json_response_from_cache(
+        cache_path=cache_path,
+        file_name="transit_search_response.json",
+        required_keys={"found"},
+    )
+    if cached is not None:
+        logger.info("Transit search cache hit key=%s", cache_key)
+        return {
+            **cached,
+            "cache": {
+                "hit": True,
+                "key": cache_key,
+                "path": cache_rel_path(cache_path),
+            },
+        }
+
+    ingest_result = ingest(
+        IngestRequest(
+            target=payload.target,
+            mission=payload.mission,
+            author=payload.author,
+            sector=payload.sector,
+        )
+    )
+    time = np.asarray(ingest_result["time"], dtype=float)
+    flux_norm = np.asarray(ingest_result["flux"], dtype=float)
+    flux_err_norm = (
+        np.asarray(ingest_result["flux_err"], dtype=float)
+        if ingest_result.get("flux_err") is not None
+        else None
+    )
+    ingest_meta = ingest_result.get("meta") or {}
+
+    baseline_days = float(time.max() - time.min()) if time.size > 1 else 0.0
+    if time.size < 20 or baseline_days <= payload.min_period_days:
+        response_payload = {
+            "found": False,
+            "reason": "Insufficient baseline or points for a reliable transit search",
+            "diagnostics": {
+                "baseline_days": baseline_days,
+                "cadence_seconds": ingest_meta.get("cadence_seconds"),
+                "search": {
+                    "min_period_days": float(payload.min_period_days),
+                    "max_period_days": payload.max_period_days,
+                    "n_durations": 0,
+                    "n_periods": 0,
+                },
+            },
+        }
+        save_json_response_to_cache(
+            cache_path=cache_path,
+            cache_key=cache_key,
+            request_payload=cache_request,
+            response_payload=response_payload,
+            response_file_name="transit_search_response.json",
+        )
+        return {
+            **response_payload,
+            "cache": {
+                "hit": False,
+                "key": cache_key,
+                "path": cache_rel_path(cache_path),
+            },
+        }
+
+    flux_detrended = detrend_flux(
+        time=time,
+        flux=flux_norm,
+        window_days=float(payload.detrend_window_days),
+    )
+    try:
+        bls_result = run_bls(
+            time=time,
+            flux_detrended=flux_detrended,
+            flux_err=flux_err_norm,
+            min_period=float(payload.min_period_days),
+            max_period=payload.max_period_days,
+        )
+    except ValueError as exc:
+        response_payload = {"found": False, "reason": str(exc)}
+        save_json_response_to_cache(
+            cache_path=cache_path,
+            cache_key=cache_key,
+            request_payload=cache_request,
+            response_payload=response_payload,
+            response_file_name="transit_search_response.json",
+        )
+        return {
+            **response_payload,
+            "cache": {
+                "hit": False,
+                "key": cache_key,
+                "path": cache_rel_path(cache_path),
+            },
+        }
+
+    phase, folded_flux = phase_fold(
+        time=time,
+        flux_detrended=flux_detrended,
+        period=float(bls_result["best_period"]),
+        t0=float(bls_result["best_t0"]),
+    )
+    phase_binned, flux_binned = bin_folded_curve(
+        phase=phase,
+        folded_flux=folded_flux,
+        bins=int(payload.fold_bins),
+    )
+
+    candidate = {
+        "period_days": float(bls_result["best_period"]),
+        "t0_btjd": float(bls_result["best_t0"]),
+        "duration_hours": float(bls_result["best_duration"]) * 24.0,
+        "depth_pct": float(bls_result["best_depth"]) * 100.0,
+        "depth_snr": bls_result["depth_snr"],
+        "sde": bls_result["sde"],
+        "n_transits_observed": int(bls_result["n_transits_observed"]),
+        "time_system": {
+            "format": ingest_meta.get("time_format", "BTJD"),
+            "zero_point": ingest_meta.get("time_zero_point"),
+            "scale": ingest_meta.get("time_scale", "TDB"),
+        },
+    }
+    response_payload = {
+        "found": True,
+        "candidate": candidate,
+        "folded": {
+            "phase": phase_binned.tolist(),
+            "flux": flux_binned.tolist(),
+            "bins": int(payload.fold_bins),
+        },
+        "diagnostics": {
+            "baseline_days": float(bls_result["baseline_days"]),
+            "cadence_seconds": ingest_meta.get("cadence_seconds"),
+            "search": {
+                "min_period_days": float(bls_result["min_period_days"]),
+                "max_period_days": float(bls_result["max_period_days"]),
+                "n_durations": int(bls_result["n_durations"]),
+                "n_periods": int(bls_result["n_periods"]),
+            },
+        },
+    }
+
+    elapsed_ms = (perf_counter() - started) * 1000.0
+    logger.info(
+        "TESS transit search target=%s n_points=%s baseline_days=%s best_period=%s best_depth_pct=%s best_duration_hr=%s sde=%s elapsed_ms=%s",
+        normalized["target"],
+        time.size,
+        float(bls_result["baseline_days"]),
+        candidate["period_days"],
+        candidate["depth_pct"],
+        candidate["duration_hours"],
+        candidate["sde"],
+        round(elapsed_ms, 2),
+    )
+
+    save_json_response_to_cache(
+        cache_path=cache_path,
+        cache_key=cache_key,
+        request_payload=cache_request,
+        response_payload=response_payload,
+        response_file_name="transit_search_response.json",
+    )
+    return {
+        **response_payload,
+        "cache": {
+            "hit": False,
+            "key": cache_key,
+            "path": cache_rel_path(cache_path),
+        },
     }
