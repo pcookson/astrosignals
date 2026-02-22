@@ -22,12 +22,25 @@ export interface TransitCandidate {
     zero_point: number | null
     scale: string
   }
+  fit?: {
+    depth_pct_fit: number
+    duration_hours_fit: number
+    ingress_minutes_fit: number
+    baseline_fit: number
+    phase0_fit: number
+    rms_residual: number
+    vshape_metric: number
+  } | null
 }
 
 export interface FoldedCurve {
   phase: number[]
   flux: number[]
   bins: number
+  model?: {
+    phase: number[]
+    flux: number[]
+  }
 }
 
 export interface TransitSearchResponse {

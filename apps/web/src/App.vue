@@ -175,6 +175,41 @@
         </span>
         <span class="candidate-value">{{ transitResult.candidate.n_transits_observed }}</span>
       </p>
+
+      <h3 v-if="transitResult.candidate.fit" class="candidate-subheading">
+        Refined Fit (Trapezoid)
+      </h3>
+      <p v-if="transitResult.candidate.fit" class="candidate-item">
+        <span class="candidate-label">Depth (fit) %</span>
+        <span class="candidate-value">
+          {{ transitResult.candidate.fit.depth_pct_fit.toFixed(3) }}
+        </span>
+      </p>
+      <p v-if="transitResult.candidate.fit" class="candidate-item">
+        <span class="candidate-label">Duration (fit) hr</span>
+        <span class="candidate-value">
+          {{ transitResult.candidate.fit.duration_hours_fit.toFixed(2) }}
+        </span>
+      </p>
+      <p v-if="transitResult.candidate.fit" class="candidate-item">
+        <span class="candidate-label">Ingress/Egress (fit) min</span>
+        <span class="candidate-value">
+          {{ transitResult.candidate.fit.ingress_minutes_fit.toFixed(1) }}
+        </span>
+      </p>
+      <p v-if="transitResult.candidate.fit" class="candidate-item">
+        <span class="candidate-label">RMS residual</span>
+        <span class="candidate-value">
+          {{ transitResult.candidate.fit.rms_residual.toExponential(2) }}
+        </span>
+      </p>
+      <p v-if="transitResult.candidate.fit" class="candidate-item">
+        <span class="candidate-label">Shape (vshape_metric)</span>
+        <span class="candidate-value">
+          {{ transitResult.candidate.fit.vshape_metric.toFixed(3) }}
+          <span class="candidate-hint">Higher = more V-shaped</span>
+        </span>
+      </p>
     </section>
 
     <div
@@ -381,18 +416,31 @@ async function renderTransitPlot(data: TransitSearchResponse) {
     return
   }
 
+  const traces: Record<string, unknown>[] = [
+    {
+      x: data.folded.phase,
+      y: data.folded.flux,
+      type: 'scatter',
+      mode: 'markers',
+      name: 'Binned folded flux',
+      marker: { size: 5 }
+    }
+  ]
+
+  if (data.folded.model) {
+    traces.push({
+      x: data.folded.model.phase,
+      y: data.folded.model.flux,
+      type: 'scatter',
+      mode: 'lines',
+      name: 'Trapezoid fit',
+      line: { width: 2 }
+    })
+  }
+
   await Plotly.react(
     transitPlotEl.value,
-    [
-      {
-        x: data.folded.phase,
-        y: data.folded.flux,
-        type: 'scatter',
-        mode: 'markers',
-        name: 'Binned folded flux',
-        marker: { size: 5 }
-      }
-    ],
+    traces,
     {
       title: 'Phase-folded Transit (BLS best period)',
       margin: { t: 44, r: 20, b: 50, l: 60 },
@@ -635,6 +683,11 @@ h2 {
   font-size: 1.1rem;
 }
 
+h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
 .source {
   max-width: 240px;
 }
@@ -682,6 +735,13 @@ button {
   grid-column: 1 / -1;
 }
 
+.candidate-subheading {
+  grid-column: 1 / -1;
+  margin-top: 0.25rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid #e5e7eb;
+}
+
 .candidate-card p {
   margin: 0;
 }
@@ -705,6 +765,13 @@ button {
   line-height: 1.2;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+
+.candidate-hint {
+  display: block;
+  font-weight: 400;
+  font-size: 0.8rem;
+  color: #667085;
 }
 
 .transit-status,
@@ -744,6 +811,14 @@ small {
 @media (prefers-color-scheme: dark) {
   .candidate-label {
     color: #cbd5e1;
+  }
+
+  .candidate-subheading {
+    border-top-color: #334155;
+  }
+
+  .candidate-hint {
+    color: #94a3b8;
   }
 }
 </style>

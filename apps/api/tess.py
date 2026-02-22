@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from analysis.transit_bls import bin_folded_curve, detrend_flux, phase_fold, run_bls
+from analysis.transit_trapezoid import fit_trapezoid_to_folded, trapezoid_model
 from cache_utils import build_cache_key
 from config import CACHE_DIR
 
@@ -480,6 +481,7 @@ def transit_search(payload: TransitSearchRequest) -> dict[str, Any]:
 
     cache_request = {
         "source": "TESS_TRANSIT_BLS",
+        "response_schema_version": 2,
         "target": normalized["target"],
         "mission": normalized["mission"],
         "author": normalized["author"],
@@ -616,14 +618,73 @@ def transit_search(payload: TransitSearchRequest) -> dict[str, Any]:
             "scale": ingest_meta.get("time_scale", "TDB"),
         },
     }
+
+    folded_payload: dict[str, Any] = {
+        "phase": phase_binned.tolist(),
+        "flux": flux_binned.tolist(),
+        "bins": int(payload.fold_bins),
+    }
+
+    try:
+        fit = fit_trapezoid_to_folded(
+            phase_binned=phase_binned,
+            flux_binned=flux_binned,
+            period_days=float(candidate["period_days"]),
+            bls_candidate=candidate,
+        )
+        candidate["fit"] = fit
+
+        if fit is not None:
+            model_phase = np.linspace(-0.5, 0.5, 1000, endpoint=False, dtype=float)
+            duration_phase_fit = (
+                (float(fit["duration_hours_fit"]) / 24.0)
+                / max(float(candidate["period_days"]), 1e-9)
+            )
+            ingress_phase_fit = (
+                (float(fit["ingress_minutes_fit"]) / (24.0 * 60.0))
+                / max(float(candidate["period_days"]), 1e-9)
+            )
+            model_flux = trapezoid_model(
+                model_phase,
+                baseline=float(fit["baseline_fit"]),
+                depth=float(fit["depth_pct_fit"]) / 100.0,
+                duration_phase=duration_phase_fit,
+                ingress_phase=ingress_phase_fit,
+                phase0=float(fit["phase0_fit"]),
+            )
+            folded_payload["model"] = {
+                "phase": model_phase.tolist(),
+                "flux": model_flux.tolist(),
+            }
+            logger.info(
+                "Transit trapezoid fit target=%s period=%s depth_pct_fit=%s duration_hr_fit=%s ingress_min_fit=%s rms=%s vshape=%s",
+                normalized["target"],
+                candidate["period_days"],
+                fit["depth_pct_fit"],
+                fit["duration_hours_fit"],
+                fit["ingress_minutes_fit"],
+                fit["rms_residual"],
+                fit["vshape_metric"],
+            )
+        else:
+            logger.info(
+                "Transit trapezoid fit skipped/failed target=%s period=%s reason=no_fit",
+                normalized["target"],
+                candidate["period_days"],
+            )
+    except Exception:
+        candidate["fit"] = None
+        logger.warning(
+            "Transit trapezoid fit failed target=%s period=%s",
+            normalized["target"],
+            candidate["period_days"],
+            exc_info=True,
+        )
+
     response_payload = {
         "found": True,
         "candidate": candidate,
-        "folded": {
-            "phase": phase_binned.tolist(),
-            "flux": flux_binned.tolist(),
-            "bins": int(payload.fold_bins),
-        },
+        "folded": folded_payload,
         "diagnostics": {
             "baseline_days": float(bls_result["baseline_days"]),
             "cadence_seconds": ingest_meta.get("cadence_seconds"),
